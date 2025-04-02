@@ -14,13 +14,11 @@ class Trader:
         result = {}
         conversions = 0
 
-        # Deserialize traderData
+        # Load or initialize trader state
         if state.traderData:
             memory = jsonpickle.decode(state.traderData)
         else:
             memory = {}
-
-        total_value = 0
 
         for product, order_depth in state.order_depths.items():
             orders: List[Order] = []
@@ -31,9 +29,11 @@ class Trader:
                 memory[product] = {
                     "recent_prices": deque(maxlen=HISTORY_LENGTH),
                     "cash": 0,
-                    "inventory": 0
+                    "inventory": 0,
+                    "pnl": 0
                 }
 
+            # Fair price using trade average + book midpoint
             best_bid = max(bids.keys()) if bids else None
             best_ask = min(asks.keys()) if asks else None
             book_fair = (best_bid + best_ask) / 2 if best_bid and best_ask else (100 if product == "KELP" else 10)
@@ -41,62 +41,53 @@ class Trader:
             for trade in state.market_trades.get(product, []):
                 memory[product]["recent_prices"].append(trade.price)
 
-            trade_prices = memory[product]["recent_prices"]
-            if trade_prices:
-                avg_trade_price = sum(trade_prices) / len(trade_prices)
-                fair_price = (book_fair + avg_trade_price) / 2
-            else:
-                fair_price = book_fair
+            recent = memory[product]["recent_prices"]
+            avg_trade_price = sum(recent) / len(recent) if recent else book_fair
+            fair_price = (book_fair + avg_trade_price) / 2
 
-            print(f"\nTimestamp: {state.timestamp}")
-            print(f"{product} | Fair: {fair_price:.2f}, Book Fair: {book_fair:.2f}, Avg Trade: {avg_trade_price if trade_prices else 'N/A'}")
-            print(f"Buy Orders: {bids}")
-            print(f"Sell Orders: {asks}")
-
-            current_position = state.position.get(product, 0)
-            position_limit = POSITION_LIMITS[product]
-            inventory = memory[product]["inventory"]
+            position = state.position.get(product, 0)
+            inv = memory[product]["inventory"]
             cash = memory[product]["cash"]
 
-            spread = (best_ask - best_bid) if best_ask and best_bid else 100
-            buy_threshold = 0.5 if spread < 5 else 1
-            sell_threshold = 0.5 if spread < 5 else 1
+            spread = (best_ask - best_bid) if best_bid and best_ask else 1
+            buy_edge = fair_price - 1
+            sell_edge = fair_price + 1
 
+            # BUY below fair value if we have inventory room
             for ask_price, ask_volume in sorted(asks.items()):
-                if ask_price < fair_price - buy_threshold:
-                    volume = min(-ask_volume, position_limit - current_position)
+                if ask_price <= buy_edge:
+                    volume = min(-ask_volume, POSITION_LIMITS[product] - position)
                     if volume > 0:
                         orders.append(Order(product, ask_price, volume))
                         memory[product]["cash"] -= ask_price * volume
                         memory[product]["inventory"] += volume
-                        current_position += volume
-                        print(f"Placing BUY: {volume}x @ {ask_price}")
+                        print(f"BUY {volume}@{ask_price} [{product}]")
 
+            # SELL above fair value if we have inventory
             for bid_price, bid_volume in sorted(bids.items(), reverse=True):
-                if bid_price > fair_price + sell_threshold:
-                    volume = min(bid_volume, current_position + position_limit)
+                if bid_price >= sell_edge:
+                    volume = min(bid_volume, position + POSITION_LIMITS[product])
                     if volume > 0:
                         orders.append(Order(product, bid_price, -volume))
                         memory[product]["cash"] += bid_price * volume
                         memory[product]["inventory"] -= volume
-                        current_position -= volume
-                        print(f"Placing SELL: {volume}x @ {bid_price}")
+                        print(f"SELL {volume}@{bid_price} [{product}]")
 
-            inv = memory[product]["inventory"]
-            cash = memory[product]["cash"]
-            est_value = inv * fair_price + cash
-            print(f"{product} | Inventory: {inv}, Cash: {cash:.2f}, Est. Value: {est_value:.2f}")
-
-            total_value += est_value
+            # Log final values
+            est_val = memory[product]["inventory"] * fair_price + memory[product]["cash"]
+            print(f"{product}: Inv={memory[product]['inventory']}, Cash={memory[product]['cash']:.2f}, Fair={fair_price:.2f}, Val={est_val:.2f}")
             result[product] = orders
 
-        print("\n===== FINAL SUMMARY =====")
+        # Final summary log
+        print("\n===== FINAL SHELL SUMMARY =====")
+        total = 0
         for product in memory:
-            inv = memory[product]['inventory']
-            cash = memory[product]['cash']
-            est_fair = (sum(memory[product]['recent_prices']) / len(memory[product]['recent_prices'])) if memory[product]['recent_prices'] else 0
-            value = inv * est_fair + cash
-            print(f"{product}: Inventory = {inv}, Cash = {cash:.2f}, Est. Fair = {est_fair:.2f}, Total = {value:.2f}")
-        print(f"TOTAL ESTIMATED SEASHELLS: {total_value:.2f}")
+            inv = memory[product]["inventory"]
+            cash = memory[product]["cash"]
+            fair = sum(memory[product]["recent_prices"]) / len(memory[product]["recent_prices"]) if memory[product]["recent_prices"] else 0
+            total_val = inv * fair + cash
+            print(f"{product}: Cash={cash:.2f}, Inv={inv}, Fair={fair:.2f}, Total={total_val:.2f}")
+            total += total_val
+        print(f"TOTAL SHELL VALUE: {total:.2f}")
 
         return result, conversions, jsonpickle.encode(memory)
