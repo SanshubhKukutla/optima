@@ -14,3 +14,6 @@ You can also put the log output (inside log files) into the drop file here https
 
 This is an open source visualizer
 
+Our super secret python algorithm is trader.py!! 
+
+Right now using a basic scalping strategy that makes a lot of buys/sells when strictly above a threshold for under fairvalue and over fairvalue
