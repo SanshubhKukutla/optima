@@ -54,6 +54,7 @@ class Logger:
     def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
         return {symbol: [depth.buy_orders, depth.sell_orders] for symbol, depth in order_depths.items()}
 
+
     def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
         return [[t.symbol, t.price, t.quantity, t.buyer, t.seller, t.timestamp] for ts in trades.values() for t in ts]
 
@@ -76,25 +77,38 @@ logger = Logger()
 
 
 class Trader:
+    def __init__(self):
+        self.POSITION_LIMIT = 20
+
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         result = {}
         conversions = 0
         trader_data = ""
 
         for symbol, order_depth in state.order_depths.items():
-            fair_price = 10000  # Replace with your own fair price logic
-            best_bid = max(order_depth.buy_orders.keys(), default=None)
-            best_ask = min(order_depth.sell_orders.keys(), default=None)
-
-            logger.print(f"{symbol} BID={best_bid} ASK={best_ask} Fair={fair_price}")
-
             orders = []
+            position = state.position.get(symbol, 0)
+            buy_orders = order_depth.buy_orders
+            sell_orders = order_depth.sell_orders
 
-            if best_ask is not None and best_ask < fair_price:
-                orders.append(Order(symbol, best_ask, 1))
+            if not buy_orders or not sell_orders:
+                continue
 
-            if best_bid is not None and best_bid > fair_price:
-                orders.append(Order(symbol, best_bid, -1))
+            best_bid = max(buy_orders)
+            best_ask = min(sell_orders)
+            fair_price = (best_bid + best_ask) / 2
+            spread = best_ask - best_bid
+
+            logger.print(f"{symbol} | Fair={fair_price:.2f} Spread={spread:.2f} Pos={position}")
+
+            # Buy if spread is decent and we aren't overexposed
+            if spread > 1:
+                if position < self.POSITION_LIMIT:
+                    buy_qty = min(3, self.POSITION_LIMIT - position)
+                    orders.append(Order(symbol, best_bid + 1, buy_qty))
+                if position > -self.POSITION_LIMIT:
+                    sell_qty = min(3, self.POSITION_LIMIT + position)
+                    orders.append(Order(symbol, best_ask - 1, -sell_qty))
 
             if orders:
                 result[symbol] = orders
